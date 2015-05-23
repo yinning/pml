@@ -1,0 +1,166 @@
+---
+title: "Practical Machine Learning Project"
+author: "Yinning"
+date: "Monday, May 18, 2015"
+output: html_document
+---
+
+## Synopsis
+Devices such as Jawbone Up, Nike FuelBand and Fitbit have now made possible to collect a large amount of data about personal activity easily. Regular measurement data allow the wearers to have information to find patterns in their behaviour, or quantify how much of a particular activity they do. Perhaps, lesser known to many, we can use the data to determine how well a particular activity is done. 
+
+In this project, we will investigate the use of machine learning algorithms in predicting "how (well)" an activity was performed by the wearer. 
+
+We will use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.These 6 young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes.
+
+You can read more about the study and how the dataset is collected from this [website](http://groupware.les.inf.puc-rio.br/har#ixzz3aVS0KmWJ) (see the section on the Weight Lifting Exercise Dataset)
+
+## Getting Data
+
+We first download the training and testing datasets from the given links. 
+
+```{r}
+library(knitr)
+setwd("D:/Dropbox/Coursera/01 Data Science/08 Practical Machine Learning/Project")
+
+# Create data directory
+if (!dir.exists("./data")){dir.create("./data")}
+
+# Training files
+if (!file.exists("./data/pml-training.csv")){
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv",
+                  destfile = "./data/pml-training.csv")
+    }
+training <- read.csv("./data/pml-training.csv", na.string=c("NA", "#DIV/0!", ""))
+
+# Testing files
+if (!file.exists("./data/pml-testing.csv")){
+    download.file("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv",
+                  destfile = "./data/pml-testing.csv")
+    }
+testing <- read.csv("./data/pml-testing.csv", na.string=c("NA", "#DIV/0!", ""))
+```
+
+## Cleaning Data
+
+Before cleaning the data, one should open up the csv files to have a quick feel of what sort of data is there in the datasets. Then, we can devise the steps to clean the data. 
+
+### 1. Remove variables with more than 75% of NA values
+I found that there are numerous "NA", "#DIV/0!" or blank values. Hence, I replaced these values with "NA" in the training and testing sets. I am going to remove variables with large proportion of NA values as they will not be useful to our machine learning algorithm.
+
+```{r}
+# Find the variable names with more than 75% of NA values
+tmpNA <- data.frame(colNames = names(training), proportionOfNA = sapply(training, function(x) sum(is.na(x))/length(x)))
+tmpNAIndex <- which(tmpNA$proportionOfNA >= 0.75)
+
+# Print out a list of column names that have more than 75% of NA values
+names(training)[tmpNAIndex]
+
+# Create temporary training sets by removing the variables
+tmpTraining <- training[,-tmpNAIndex]
+
+# Check if there are any more missing values
+sum(is.na(tmpTraining))
+
+# Remove temp files
+rm(tmpNA)
+rm(tmpNAIndex)
+```
+
+### 2.Remove metadata variables
+The first 7 columns of the dataset contain irrelevant information for our training purpose. So I think it's better to remove them in case they hinder the model selection process. 
+
+The 7 columns are:
+```{r}
+names(tmpTraining)[1:7]
+```
+
+```{r}
+# Remove the first 7 columns
+tmpTraining <- tmpTraining[,-(1:7)]
+```
+
+### 3. Create training and validation sets
+We will further partition the given training set into myTraining and myValidation sets for training and validation purposes. The given testing set will be the blind data set that will not be involved in training at all. 
+
+```{r}
+library(caret)
+library(randomForest)
+library(rpart)
+set.seed(131313)
+
+inTrain <- createDataPartition(tmpTraining$classe, p=3/4)[[1]]
+
+#Create myTraining set and myValidation set
+myTraining <- tmpTraining[inTrain,]
+myValidation <- tmpTraining[-inTrain,]
+```
+
+## Model Selection 
+The purpose of the model is to predict the outcome `classe` with the given variables. I have decided to try building models using decision tree, random forest, and an ensemble of random forest and boosting to see which of the model gives better accuracy. 
+
+### 1. Decision tree with 10-fold cross validation
+
+I will use the out of the box decision tree algorithm given in `r library(rpart)` package. I will also be using 10-folds cross validation to pick the best decision tree model, and it is done using the cross validation training option given in `train()` function in `library(caret)`. 
+
+```{r}
+modDt <- train(classe ~., 
+               data=myTraining,
+               trControl = trainControl(method = "cv", number=10),
+               method="rpart")
+```
+
+### 2. Random Forest with 10-fold cross validation
+```{r cache=TRUE}
+modRf <- train(classe ~., 
+               data=myTraining,
+               trControl = trainControl(method = "cv", number=10),
+               method="rf")
+
+save(modRf, file="modRf.RData")
+```
+
+### Compare Decision Tree and Random Forest results on validation set
+
+```{r}
+#Compute the confusion matrices and overall accuracy statistics
+cmDt <- confusionMatrix(predict(modDt,myValidation), myValidation$classe)
+cmRf <- confusionMatrix(predict(modRf,myValidation), myValidation$classe)
+
+cmDt$overall[1]
+cmRf$overall[1]
+```
+
+The accuracy of decision tree is `0.4946982` and accuracy of random forest algorithm is `0.9940865`. Hence, due to the substantial superiority of the random forest algorithm in this dataset, we will choose to implement a random forest algorithm.
+
+## Train final model to make prediction on testing set
+
+```{r}
+modRfFinal <- train(classe ~., 
+               data=tmpTraining,
+               trControl = trainControl(method = "cv", number=10),
+               method="rf")
+
+modRfFinal$results
+```
+
+The final prediction of the 20 test cases are:
+```{r}
+answers <- predict(modRfFinal,testing)
+
+answers
+
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(answers)
+```
+
+## Expected out of sample error
+
+The expected out of sample error of the final random forest model built using 10-fold cross-validation is `r round(1 - modRfFinal$results[1,2], 4)*100`% (1-modRfFinal$accuracy) 
